@@ -240,13 +240,15 @@ var _ = Describe("Client", func() {
 					RequestConnectionIDOmission: true,
 					MaxIncomingStreams:          1234,
 					MaxIncomingUniStreams:       4321,
+					ConnectionIDLength:          13,
 				}
-				c := populateClientConfig(config)
+				c := populateClientConfig(config, false)
 				Expect(c.HandshakeTimeout).To(Equal(1337 * time.Minute))
 				Expect(c.IdleTimeout).To(Equal(42 * time.Hour))
 				Expect(c.RequestConnectionIDOmission).To(BeTrue())
 				Expect(c.MaxIncomingStreams).To(Equal(1234))
 				Expect(c.MaxIncomingUniStreams).To(Equal(4321))
+				Expect(c.ConnectionIDLength).To(Equal(13))
 			})
 
 			It("errors when the Config contains an invalid version", func() {
@@ -260,7 +262,7 @@ var _ = Describe("Client", func() {
 					MaxIncomingStreams:    -1,
 					MaxIncomingUniStreams: 4321,
 				}
-				c := populateClientConfig(config)
+				c := populateClientConfig(config, false)
 				Expect(c.MaxIncomingStreams).To(BeZero())
 				Expect(c.MaxIncomingUniStreams).To(Equal(4321))
 			})
@@ -270,13 +272,25 @@ var _ = Describe("Client", func() {
 					MaxIncomingStreams:    1234,
 					MaxIncomingUniStreams: -1,
 				}
-				c := populateClientConfig(config)
+				c := populateClientConfig(config, false)
 				Expect(c.MaxIncomingStreams).To(Equal(1234))
 				Expect(c.MaxIncomingUniStreams).To(BeZero())
 			})
 
+			It("uses 0-byte connection IDs when dialing an address", func() {
+				config := &Config{}
+				c := populateClientConfig(config, false)
+				Expect(c.ConnectionIDLength).To(BeZero())
+			})
+
+			It("doesn't use 0-byte connection IDs when dialing an address", func() {
+				config := &Config{}
+				c := populateClientConfig(config, true)
+				Expect(c.ConnectionIDLength).To(Equal(protocol.DefaultConnectionIDLength))
+			})
+
 			It("fills in default values if options are not set in the Config", func() {
-				c := populateClientConfig(&Config{})
+				c := populateClientConfig(&Config{}, false)
 				Expect(c.Versions).To(Equal(protocol.SupportedVersions))
 				Expect(c.HandshakeTimeout).To(Equal(protocol.DefaultHandshakeTimeout))
 				Expect(c.IdleTimeout).To(Equal(protocol.DefaultIdleTimeout))
@@ -514,6 +528,7 @@ var _ = Describe("Client", func() {
 			})
 
 			It("drops version negotiation packets that contain the offered version", func() {
+				cl.config = &Config{}
 				ver := cl.version
 				cl.handleRead(nil, wire.ComposeGQUICVersionNegotiation(connID, []protocol.VersionNumber{ver}))
 				Expect(cl.version).To(Equal(ver))
@@ -527,6 +542,7 @@ var _ = Describe("Client", func() {
 	})
 
 	It("ignores packets with an invalid public header", func() {
+		cl.config = &Config{}
 		cl.session = NewMockQuicSession(mockCtrl) // don't EXPECT any handlePacket calls
 		cl.handleRead(addr, []byte("invalid packet"))
 	})
