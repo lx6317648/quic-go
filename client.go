@@ -128,23 +128,13 @@ func DialContext(
 func newClient(pconn net.PacketConn, remoteAddr net.Addr, config *Config, tlsConf *tls.Config, host string) (*client, error) {
 	clientConfig := populateClientConfig(config)
 	version := clientConfig.Versions[0]
-	srcConnID, err := generateConnectionID()
-	if err != nil {
-		return nil, err
-	}
-	destConnID := srcConnID
-	if version.UsesTLS() {
-		destConnID, err = generateConnectionID()
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	var hostname string
 	if tlsConf != nil {
 		hostname = tlsConf.ServerName
 	}
 	if hostname == "" {
+		var err error
 		hostname, _, err = net.SplitHostPort(host)
 		if err != nil {
 			return nil, err
@@ -159,17 +149,16 @@ func newClient(pconn net.PacketConn, remoteAddr net.Addr, config *Config, tlsCon
 			}
 		}
 	}
-	return &client{
+	c := &client{
 		conn:          &conn{pconn: pconn, currentAddr: remoteAddr},
-		srcConnID:     srcConnID,
-		destConnID:    destConnID,
 		hostname:      hostname,
 		tlsConf:       tlsConf,
 		config:        clientConfig,
 		version:       version,
 		handshakeChan: make(chan struct{}),
 		logger:        utils.DefaultLogger.WithPrefix("client"),
-	}, nil
+	}
+	return c, c.generateConnectionIDs()
 }
 
 // populateClientConfig populates fields in the quic.Config with their default values, if none are set
@@ -224,6 +213,23 @@ func populateClientConfig(config *Config) *Config {
 		MaxIncomingUniStreams:                 maxIncomingUniStreams,
 		KeepAlive:                             config.KeepAlive,
 	}
+}
+
+func (c *client) generateConnectionIDs() error {
+	srcConnID, err := generateConnectionID(protocol.ConnectionIDLenGQUIC)
+	if err != nil {
+		return err
+	}
+	destConnID := srcConnID
+	if c.version.UsesTLS() {
+		destConnID, err = protocol.GenerateDestinationConnectionID()
+		if err != nil {
+			return err
+		}
+	}
+	c.srcConnID = srcConnID
+	c.destConnID = destConnID
+	return nil
 }
 
 func (c *client) dial(ctx context.Context) error {
@@ -488,15 +494,8 @@ func (c *client) handleVersionNegotiationPacket(hdr *wire.Header) error {
 	// switch to negotiated version
 	c.initialVersion = c.version
 	c.version = newVersion
-	var err error
-	c.destConnID, err = generateConnectionID()
-	if err != nil {
-		return err
-	}
-	// in gQUIC, there's only one connection ID
-	if !c.version.UsesTLS() {
-		c.srcConnID = c.destConnID
-	}
+	c.generateConnectionIDs()
+
 	c.logger.Infof("Switching to QUIC version %s. New connection ID: %s", newVersion, c.destConnID)
 	c.session.Close(errCloseSessionForNewVersion)
 	return nil
